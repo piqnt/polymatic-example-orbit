@@ -29,6 +29,7 @@ export class Terminal extends Middleware<MainContext> {
   life: Stage.Monotype;
   score: Stage.Monotype;
   startButton: Stage.Sprite;
+  background: Stage.Sprite;
 
   constructor() {
     super();
@@ -38,27 +39,24 @@ export class Terminal extends Middleware<MainContext> {
     this.on("game-over", this.handleGameOver);
   }
 
+  handleViewport = () => {
+    const stage = this.context.stage;
+    this.background.fit(stage.width(), stage.height(), "out");
+    this.homeScreen.size(stage.width(), stage.height());
+  };
+
   handleActivate = () => {
     const stage = this.context.stage;
+    stage.on("viewport", this.handleViewport);
 
-    const background = Stage.sprite("background");
-    background.pin("align", 0.5);
-    background.on("viewport", () => {
-      // on viewport change scale it to fill stage
-      background.fit(stage.width(), stage.height(), "out");
-    });
-    background.appendTo(stage);
+    this.background = Stage.sprite("background");
+    this.background.pin("align", 0.5);
+    this.background.appendTo(stage);
 
     this.screenSwitch = new ScreenSwitch();
     this.screenSwitch.appendTo(stage);
 
     this.homeScreen = Stage.component();
-    this.homeScreen.on("viewport", () => {
-      this.homeScreen.pin({
-        width: stage.width(),
-        height: stage.height(),
-      });
-    });
     this.homeScreen.hide();
     this.homeScreen.appendTo(stage);
 
@@ -103,6 +101,8 @@ export class Terminal extends Middleware<MainContext> {
     this.space.attr("spy", true);
 
     this.screenSwitch.view(this.homeScreen);
+
+    this.handleViewport();
   };
 
   handleGameStart = () => {
