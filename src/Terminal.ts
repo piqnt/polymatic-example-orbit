@@ -45,11 +45,7 @@ export class Terminal extends Middleware<MainContext> {
     background.pin("align", 0.5);
     background.on("viewport", () => {
       // on viewport change scale it to fill stage
-      background.pin({
-        scaleMode: "out",
-        scaleWidth: stage.width(),
-        scaleHeight: stage.height(),
-      });
+      background.fit(stage.width(), stage.height(), "out");
     });
     background.appendTo(stage);
 
