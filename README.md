@@ -1,6 +1,6 @@
 # Orbital Defense Game - Polymatic Example
 
-Implemented using [Polymatic](https://github.com/piqnt/polymatic) framework and [Stage.js](https://github.com/piqnt/stage.js) rendering engine.
+Implemented using [Polymatic](https://github.com/piqnt/polymatic) framework and [Pixi.js](https://pixijs.com/) rendering engine.
 
 [Play Live Demo](https://piqnt.github.io/polymatic-example-orbit/)
 

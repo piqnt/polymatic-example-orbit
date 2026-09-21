@@ -1,202 +1,240 @@
 // Copyright (c) Ali Shakiba
 // Licensed under the MIT License
 
-import * as Stage from "stage-js";
+import { Container, Sprite, type FederatedPointerEvent, type Texture } from "pixi.js";
 import { Binder, Driver, Middleware } from "polymatic";
+import { TransitionManager } from "@piqnt/transition";
 
 import { type MainContext } from "./Main";
-import { Asteroid, Bullet, LIFE, Orbit, Planet } from "./Data";
+import { Asteroid, Bullet, LIFE, Orbit, Planet, type Vector } from "./Data";
+import { type FrameLoopEvent } from "./FrameLoop";
 
-class ScreenSwitch extends Stage.Node {
-  view = (active: Stage.Node) => {
-    if (active.parent() !== this) {
-      active.remove().appendTo(this);
-    }
-    if (!active.visible()) {
-      active.show();
-    }
-    for (let child = this.first(); child; child = child.next()) {
-      active !== child && child.visible() && child.hide();
-    }
-  };
-}
+// the smaller screen dimension is fitted to this many scene units
+const VIEWBOX_WIDTH = 150;
+const VIEWBOX_HEIGHT = 150;
+
+const HUD_MARGIN = 2;
+const HUD_SPACING = 2;
+const HUD_SCALE = 0.8;
 
 export class Terminal extends Middleware<MainContext> {
-  screenSwitch: ScreenSwitch;
-  playScreen: Stage.Node;
-  homeScreen: Stage.Node;
-  space: Stage.Node;
-  life: Stage.Monotype;
-  score: Stage.Monotype;
-  startButton: Stage.Sprite;
-  background: Stage.Sprite;
+  background: Sprite;
+  homeScreen: Container;
+  playScreen: Container;
+  space: Container;
+  hud: Container;
+  life: DigitText;
+  score: DigitText;
+
+  transitionManager = new TransitionManager();
 
   constructor() {
     super();
     this.on("activate", this.handleActivate);
+    this.on("deactivate", this.handleDeactivate);
     this.on("frame-render", this.handleFrameRender);
     this.on("game-start", this.handleGameStart);
     this.on("game-over", this.handleGameOver);
   }
 
-  handleViewport = () => {
-    const stage = this.context.stage;
-    this.background.fit(stage.width(), stage.height(), "out");
-    this.homeScreen.size(stage.width(), stage.height());
+  handleActivate = () => {
+    const pixi = this.context.pixi;
+    const scene = this.context.scene;
+    const textures = this.context.textures;
+
+    this.background = new Sprite(textures.background);
+    this.background.anchor.set(0.5);
+    scene.addChild(this.background);
+
+    // home screen: play button at the center
+    this.homeScreen = new Container();
+    scene.addChild(this.homeScreen);
+
+    const startButton = new Sprite(textures.play);
+    startButton.anchor.set(0.5);
+    startButton.eventMode = "static";
+    startButton.cursor = "pointer";
+    startButton.on("pointertap", () => this.emit("user-start"));
+    this.homeScreen.addChild(startButton);
+
+    // play screen: space with the origin at the center
+    this.playScreen = new Container();
+    scene.addChild(this.playScreen);
+
+    this.space = new Container();
+    this.playScreen.addChild(this.space);
+
+    // life and score at the top-left corner
+    this.hud = new Container();
+    scene.addChild(this.hud);
+
+    this.life = new DigitText(textures.digits);
+    this.life.scale.set(HUD_SCALE);
+    this.hud.addChild(this.life);
+
+    this.score = new DigitText(textures.digits);
+    this.score.scale.set(HUD_SCALE);
+    this.hud.addChild(this.score);
+
+    // receive pointer events anywhere on the screen, not just on sprites
+    pixi.stage.eventMode = "static";
+    pixi.stage.hitArea = pixi.screen;
+    pixi.stage.on("pointerdown", this.handlePointerDown);
+
+    pixi.renderer.on("resize", this.handleViewport);
+    this.handleViewport();
+
+    this.showScreen(this.homeScreen);
   };
 
-  handleActivate = () => {
-    const stage = this.context.stage;
-    stage.on("viewport", this.handleViewport);
+  handleDeactivate = () => {
+    this.context.pixi?.renderer.off("resize", this.handleViewport);
+  };
 
-    this.background = Stage.sprite("background");
-    this.background.pin("align", 0.5);
-    this.background.appendTo(stage);
+  /**
+   * Fit the viewbox inside the screen, center scene origin on the screen,
+   * cover the screen with the background, and place the hud at the top-left corner.
+   */
+  handleViewport = () => {
+    const pixi = this.context.pixi;
+    const scene = this.context.scene;
 
-    this.screenSwitch = new ScreenSwitch();
-    this.screenSwitch.appendTo(stage);
+    const screenWidth = pixi.screen.width;
+    const screenHeight = pixi.screen.height;
 
-    this.homeScreen = Stage.component();
-    this.homeScreen.hide();
-    this.homeScreen.appendTo(stage);
+    const scale = Math.min(screenWidth / VIEWBOX_WIDTH, screenHeight / VIEWBOX_HEIGHT);
+    scene.scale.set(scale);
+    scene.position.set(screenWidth / 2, screenHeight / 2);
 
-    this.startButton = Stage.sprite("play");
-    this.startButton.pin("align", 0.5);
-    this.startButton.on("click", () => this.emit("user-start"));
-    this.startButton.appendTo(this.homeScreen);
+    // visible area in scene units
+    const width = screenWidth / scale;
+    const height = screenHeight / scale;
 
-    this.playScreen = Stage.component();
-    this.playScreen.on("viewport", () => {
-      this.playScreen.pin({
-        width: stage.width(),
-        height: stage.height(),
-      });
-    });
-    this.playScreen.hide();
-    this.playScreen.appendTo(stage);
+    const texture = this.background.texture;
+    this.background.scale.set(Math.max(width / texture.width, height / texture.height));
 
-    this.space = Stage.component();
-    this.space.pin("align", 0.5);
-    this.space.appendTo(this.playScreen);
+    this.hud.position.set(-width / 2 + HUD_MARGIN, -height / 2 + HUD_MARGIN);
+  };
 
-    this.score = Stage.monotype("digit");
-    this.score.scale(0.8);
-
-    this.life = Stage.monotype("digit");
-    this.life.scale(0.8);
-
-    const topLeft = Stage.row(0);
-    topLeft.spacing(2);
-    topLeft.pin({
-      offset: 2,
-      align: 0,
-      handle: 0,
-    });
-    topLeft.appendTo(stage);
-    topLeft.append(this.life, this.score);
-
-    this.space.on(Stage.POINTER_DOWN, (point) => {
-      this.emit("user-shoot", { x: point.x, y: point.y });
-    });
-    this.space.attr("spy", true);
-
-    this.screenSwitch.view(this.homeScreen);
-
-    this.handleViewport();
+  showScreen = (screen: Container) => {
+    this.homeScreen.visible = screen === this.homeScreen;
+    this.playScreen.visible = screen === this.playScreen;
   };
 
   handleGameStart = () => {
-    this.screenSwitch.view(this.playScreen);
+    this.showScreen(this.playScreen);
   };
 
   handleGameOver = () => {
-    this.screenSwitch.view(this.homeScreen);
+    this.showScreen(this.homeScreen);
   };
 
-  handleFrameRender = () => {
-    if (!this.context.stage) return;
-    this.score?.value(this.context.score);
-    this.life?.value(this.context.life);
+  handlePointerDown = (e: FederatedPointerEvent) => {
+    if (!this.playScreen.visible) return;
+    const point = this.space.toLocal(e.global);
+    this.emit("user-shoot", { x: point.x, y: point.y });
+  };
+
+  handleFrameRender = (ev: FrameLoopEvent) => {
+    this.life.setValue(this.context.life);
+    this.score.setValue(this.context.score);
+    this.score.position.x = this.life.position.x + this.life.width + HUD_SPACING;
+
     this.binder.data([this.context.planet, ...this.context.asteroids, ...this.context.orbits, ...this.context.bullets]);
+    this.transitionManager.update(ev.dt);
+  };
+
+  explode = (point: Vector, grow: number, scale: number) => {
+    const explosion = new Sprite(this.context.textures.explosion);
+    explosion.anchor.set(0.5);
+    explosion.position.set(point.x, point.y);
+    explosion.scale.set(0.1);
+    this.space.addChild(explosion);
+    this.transitionManager
+      .select(explosion)
+      .tween(grow)
+      .to({ scale: { x: scale, y: scale } })
+      .tween(200)
+      .to({ alpha: 0 })
+      .done(() => {
+        explosion.removeFromParent();
+        explosion.destroy();
+      });
   };
 
   planetRenderDriver = Driver.create({
     filter: (obj) => obj.type === "planet",
     enter: (obj: Planet) => {
-      const img = Stage.sprite("planet").pin("handle", 0.5);
-      img.appendTo(this.space);
+      const img = new Sprite(this.context.textures.planet);
+      img.anchor.set(0.5);
+      this.space.addChild(img);
       return img;
     },
-    update: (obj: Planet, img: Stage.Sprite) => {
+    update: (obj: Planet, img: Sprite) => {
       const health = Math.min(1, Math.max(0, Math.pow(this.context.life / LIFE, 2)));
-      img.alpha(health);
+      img.alpha = health;
     },
-    exit: (obj: Planet, img: Stage.Sprite) => {
-      img.remove();
+    exit: (obj: Planet, img: Sprite) => {
+      img.removeFromParent();
+      img.destroy();
     },
   });
 
   asteroidRenderDriver = Driver.create({
     filter: (obj) => obj.type === "asteroid",
     enter: (obj: Asteroid) => {
-      const img = Stage.sprite("asteroid").pin("handle", 0.5);
-      img.appendTo(this.space);
+      const img = new Sprite(this.context.textures.asteroid);
+      img.anchor.set(0.5);
+      this.space.addChild(img);
       return img;
     },
-    update: (obj: Asteroid, img: Stage.Sprite) => {
-      img.offset(obj);
+    update: (obj: Asteroid, img: Sprite) => {
+      img.position.set(obj.x, obj.y);
     },
-    exit: (obj: Asteroid, img: Stage.Sprite) => {
+    exit: (obj: Asteroid, img: Sprite) => {
       if (obj.exploded) {
-        const explosion = Stage.sprite("explosion");
-        explosion.appendTo(this.space);
-        explosion.pin("handle", 0.5);
-        explosion.offset(obj);
-        explosion.scale(0.1);
-        explosion.tween(100).scale(2).tween(200).alpha(0).remove();
+        this.explode(obj, 100, 2);
       }
-      img.remove();
+      img.removeFromParent();
+      img.destroy();
     },
   });
 
   orbitRenderDriver = Driver.create({
     filter: (obj) => obj.type === "orbit",
     enter: (obj: Orbit) => {
-      const img = Stage.sprite("orbit").pin("handle", 0.5);
-      // const ring = Stage.sprite("first").pin("align", 0.5).appendTo(img).hide();
-      img.appendTo(this.space);
+      const img = new Sprite(this.context.textures.orbit);
+      img.anchor.set(0.5);
+      this.space.addChild(img);
       return img;
     },
-    update: (obj: Orbit, img: Stage.Sprite) => {
-      img.offset(obj);
-      img.alpha(100 / (obj._ready + 100));
-      // ring.alpha(obj._ready <= 0).visible(obj._first);
+    update: (obj: Orbit, img: Sprite) => {
+      img.position.set(obj.x, obj.y);
+      img.alpha = 100 / (obj._ready + 100);
     },
-    exit: (obj: Orbit, img: Stage.Sprite) => {
-      img.remove();
+    exit: (obj: Orbit, img: Sprite) => {
+      img.removeFromParent();
+      img.destroy();
     },
   });
 
   bulletRenderDriver = Driver.create({
     filter: (obj) => obj.type === "bullet",
     enter: (obj: Bullet) => {
-      const img = Stage.sprite("bullet").pin("handle", 0.5);
-      img.appendTo(this.space);
+      const img = new Sprite(this.context.textures.bullet);
+      img.anchor.set(0.5);
+      this.space.addChild(img);
       return img;
     },
-    update: (obj: Bullet, img: Stage.Sprite) => {
-      img.offset(obj);
+    update: (obj: Bullet, img: Sprite) => {
+      img.position.set(obj.x, obj.y);
     },
-    exit: (obj: Bullet, img: Stage.Sprite) => {
+    exit: (obj: Bullet, img: Sprite) => {
       if (obj.exploded) {
-        const explosion = Stage.sprite("explosion");
-        explosion.appendTo(this.space);
-        explosion.pin("handle", 0.5);
-        explosion.offset(obj);
-        explosion.scale(0.1);
-        explosion.tween(50).scale(1).tween(200).alpha(0).remove();
+        this.explode(obj, 50, 1);
       }
-      img.remove();
+      img.removeFromParent();
+      img.destroy();
     },
   });
 
@@ -204,4 +242,34 @@ export class Terminal extends Middleware<MainContext> {
     key: (object) => object.key,
     drivers: [this.planetRenderDriver, this.asteroidRenderDriver, this.orbitRenderDriver, this.bulletRenderDriver],
   });
+}
+
+/**
+ * Renders a number as a row of digit sprites.
+ */
+class DigitText extends Container {
+  digits: Record<string, Texture>;
+  value: string | null = null;
+
+  constructor(digits: Record<string, Texture>) {
+    super();
+    this.digits = digits;
+  }
+
+  setValue(value: number | string | undefined) {
+    const text = value === undefined || value === null ? "" : String(value);
+    if (text === this.value) return;
+    this.value = text;
+
+    this.removeChildren().forEach((child) => child.destroy());
+    let x = 0;
+    for (const char of text) {
+      const texture = this.digits[char];
+      if (!texture) continue;
+      const sprite = new Sprite(texture);
+      sprite.position.x = x;
+      this.addChild(sprite);
+      x += texture.width;
+    }
+  }
 }
